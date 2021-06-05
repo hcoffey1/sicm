@@ -6,6 +6,18 @@
 #include "sicm_low.h"
 #include "sicm_tree.h"
 
+#define CGROUP_ROOT "/sys/fs/cgroup/unified/0"
+#define CGROUP_TASKS (CGROUP_ROOT "/cgroup.procs")
+#define CGROUP_MEM_HIGH (CGROUP_ROOT "/memory.high")
+#define CGROUP_MEM_MAX (CGROUP_ROOT "/memory.max")
+#define CGROUP_MEM_CURRENT (CGROUP_ROOT "/memory.current")
+#define CGROUP_MEM_COMPRESS (CGROUP_ROOT "/memory.compress")
+#define PROC_SELF_STATM "/proc/self/statm"
+#define PROC_SWAPS "/proc/swaps"
+#define ZSWAP_STORED_PAGES "/sys/kernel/debug/zswap/stored_pages"
+#define ZSWAP_POOL_TOTAL_SIZE "/sys/kernel/debug/zswap/pool_total_size"
+#define ZSWAP_SAME_FILLED_PAGES "/sys/kernel/debug/zswap/same_filled_pages"
+
 #ifdef SICM_RUNTIME
 #include "sicm_impl.h"
 #else
@@ -23,6 +35,7 @@ enum arena_layout {
   EXCLUSIVE_DEVICE_ARENAS, /* One arena per device per thread */
   SHARED_SITE_ARENAS, /* One arena per allocation site */
   BIG_SMALL_ARENAS, /* Per-thread arenas for small allocations, shared site ones for larger sites */
+  EXCLUSIVE_COMPRESS_ARENAS, /* One arena per device per thread */
   INVALID_LAYOUT
 };
 #define DEFAULT_ARENA_LAYOUT INVALID_LAYOUT
@@ -84,6 +97,7 @@ typedef struct tracker_struct {
   atomic_int **site_devices;
   atomic_char *site_bigs;
   atomic_size_t *site_sizes;
+  atomic_int *site_compress;
 
   /* Arena layout */
   enum arena_layout layout;
@@ -119,7 +133,7 @@ typedef struct profiling_options {
   char free_buffer;
   
   /* bitmask of which profiling types are enabled */
-  char profile_type_flags;
+  short profile_type_flags;
   
   int should_run_rdspy;
   int profile_latency_set_multipliers;
@@ -144,6 +158,7 @@ typedef struct profiling_options {
   FILE *profile_input_file;
   FILE *profile_output_file;
   FILE *profile_online_debug_file; /* For the verbose online approach */
+  FILE * compress_stats_file;
 
   /* Online */
   char profile_online_nobind;
@@ -157,6 +172,7 @@ typedef struct profiling_options {
   char *profile_online_packing_algo;
   size_t profile_online_value_threshold;
   float profile_online_alpha;
+  float compress_limit_ratio;
 
   /* Array of cpu numbers for profile_pebs */
   size_t num_profile_pebs_cpus;
@@ -243,6 +259,8 @@ extern "C" {
   profopts.profile_type_flags & (1 << 6)
 #define should_profile_objmap() \
   profopts.profile_type_flags & (1 << 7)
+#define should_profile_compress_stats() \
+  profopts.profile_type_flags & (1 << 8)
   
 /* Used to set which types of profiling are enabled */
 #define enable_profile_pebs() \
@@ -261,3 +279,5 @@ extern "C" {
   profopts.profile_type_flags = profopts.profile_type_flags | (1 << 6)
 #define enable_profile_objmap() \
   profopts.profile_type_flags = profopts.profile_type_flags | (1 << 7)
+#define enable_profile_compress_stats() \
+  profopts.profile_type_flags = profopts.profile_type_flags | (1 << 8)

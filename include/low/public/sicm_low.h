@@ -49,7 +49,9 @@ typedef enum sicm_arena_flags {
   SICM_ALLOC_RELAXED = 1<<0,	// prefer the assigned devices, but use other memory too
   SICM_MOVE_RELAXED  = 1<<1, // set MPOL_MF_MOVE, which moves pages that are already allocated
   SICM_MOVE_LAZY     = 1<<2, // move pages from the current node, but fault them on access
+  SICM_MADV_COMPRESS = 1<<3, // MADV Compress
 } sicm_arena_flags;
+#define MADV_COMPRESS 22
 
 /// Data specific to a DRAM device.
 typedef struct sicm_dram_data {

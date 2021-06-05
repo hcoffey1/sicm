@@ -59,3 +59,5 @@ nsites.txt
 
 # Spack stuff
 spack.lock
+tags
+build

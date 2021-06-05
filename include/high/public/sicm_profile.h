@@ -49,6 +49,14 @@ static void timespec_diff(struct timespec *start, struct timespec *stop,
 #include "sicm_runtime.h"
 #include "sicm_profilers.h"
 
+#define PAGE_SHIFT 12
+#define CACHE_BLOCK_SHIFT 6
+#define PAGE_ADDR(addr) ((intptr_t) (((intptr_t)addr) >> PAGE_SHIFT))
+#define CACHE_BLOCK_ADDR(addr) ((intptr_t) (((intptr_t)addr) >> CACHE_BLOCK_SHIFT))
+#define PFN_INVALID 1ull
+#define PAGE_SIZE (1<<PAGE_SHIFT)
+
+
 /* Profiling information for one arena */
 typedef struct arena_profile {
   unsigned index;

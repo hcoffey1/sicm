@@ -17,6 +17,95 @@ static pthread_rwlock_t profile_lock = PTHREAD_RWLOCK_INITIALIZER;
 static int global_signal;
 static char should_stop = 0;
 
+void print_proc_swaps(FILE * outfile)
+{
+    FILE * fptr;
+
+    fptr = fopen(PROC_SWAPS, "r");
+    char buff[100];
+    char * token;
+    int counter = 0;
+
+    //Skip line
+    fgets(buff, 100, fptr);
+
+    while(fgets(buff, 100, fptr) != NULL)
+    {
+        token = strtok(buff, " \t");
+        fprintf(outfile, " %s: ", token);
+        while(token != NULL)
+        {
+            if(counter >= 3)
+            {
+                fprintf(outfile, "%12llu", atoi(token));
+                break;
+            }
+            token = strtok(NULL, " \t");
+            counter++;
+        }
+        counter = 0;
+    }
+
+    fclose(fptr);
+}
+
+unsigned long long get_stat(const char *fname, int pos)
+{
+  FILE *fptr;
+  int cnt;
+  unsigned long long tmp, stat;
+
+  fptr = fopen(fname, "r");
+  if (!fptr) {
+    fprintf(stderr, "Error opening %s\n", fname);
+    perror("");
+    exit(errno);
+  }
+
+  while (cnt < pos) {
+    if ( (fscanf(fptr, "%llu", &stat)) != 1 ) {
+      fprintf(stderr, "Error reading %s\n", fname);
+      exit(-EINVAL);
+    }
+    cnt++;
+  }
+  fclose(fptr);
+
+  return stat;
+}
+
+void print_compress_stats(FILE *compressf)
+{
+  unsigned long long rss, cmp, d_rss, p_rss, same_filled, page_count;
+
+  rss   = (get_stat(PROC_SELF_STATM, 2) * PAGE_SIZE);
+  cmp   = (get_stat(ZSWAP_STORED_PAGES, 1) * PAGE_SIZE);
+  d_rss = get_stat(CGROUP_MEM_CURRENT, 1);
+  p_rss = get_stat(ZSWAP_POOL_TOTAL_SIZE, 1);
+  same_filled = get_stat(ZSWAP_SAME_FILLED_PAGES, 1);
+  page_count = get_stat(ZSWAP_STORED_PAGES, 1);
+
+  
+  fprintf(compressf, "rss: %12llu cmp: %12llu d_rss: %12llu p_rss: %12llu s_filled_p: %12llu page_count: %12llu",
+          rss, cmp, d_rss, p_rss, same_filled, page_count);
+
+  print_proc_swaps(compressf);
+
+  fprintf(compressf, "\n");
+  
+}
+
+void update_cmem_limit()
+{
+  unsigned long long cmp;
+  cmp   = (get_stat(ZSWAP_STORED_PAGES, 1) * PAGE_SIZE);
+  cmp = cmp * profopts.compress_limit_ratio;
+  fprintf(stderr, "New limit is: %lld\n", cmp);
+  cgroup_set_mem_high(cmp);
+  cgroup_set_mem_max(cmp);
+}
+
+
 /* Runs when an arena has already been created, but the runtime library
    has added an allocation site to the arena. */
 void add_site_profile(int index, int site_id) {
@@ -139,6 +228,18 @@ void profile_master_interval(int s) {
   arena_profile *aprof;
   arena_info *arena;
   profile_thread *profthread;
+
+  /* this is really only used for online runs */
+  if (should_profile_compress_stats()) {
+    print_compress_stats(profopts.compress_stats_file);
+    if(profopts.compress_limit_ratio != 0)
+    {
+        //fprintf(stderr, "Updating cmem\n");
+        update_cmem_limit();
+    }
+
+    return;
+  }
   
   /* Block the signal for a bit */
   sigemptyset(&mask);

@@ -54,7 +54,7 @@ void print_sizet(size_t val, const char *str) {
 }
 
 /* Function declarations, so I can reorder them how I like */
-void sh_create_arena(int index, int id, sicm_device *device, char invalid);
+void sh_create_arena(int index, int id, char compress, sicm_device *device, char invalid);
 
 /*************************************************
  *            PROFILE_ALLOCS                     *
@@ -266,7 +266,7 @@ int get_big_small_arena(int id, size_t sz, deviceptr *device, char *new_site, ch
 
 /* Gets the index that the allocation site should go into */
 int get_arena_index(int id, size_t sz) {
-  int ret, thread_index;
+  int ret, thread_index, compress;
   deviceptr device;
   siteinfo_ptr site;
   char new_site, invalid;
@@ -275,6 +275,7 @@ int get_arena_index(int id, size_t sz) {
   new_site = 0;
   ret = 0;
   device = NULL;
+  compress = (char)0;
   switch(tracker.layout) {
     case ONE_ARENA:
       ret = 0;
@@ -283,6 +284,14 @@ int get_arena_index(int id, size_t sz) {
       /* One arena per thread. */
       thread_index = get_thread_index() + 1;
       ret = thread_index;
+      break;
+    case EXCLUSIVE_COMPRESS_ARENAS:
+      /* Two arenas per thread: one for each memory tier. */
+      thread_index = get_thread_index();
+      compress = tracker.site_compress[id];
+      //fprintf(stderr, "id: %3d tidx: %d compress: %d tptr: %p\n", id,
+      //  thread_index, compress, &(tracker.site_compress[id])); fflush(stderr);
+      ret = (thread_index * tracker.arenas_per_thread) + compress;
       break;
     case EXCLUSIVE_DEVICE_ARENAS:
       /* Two arenas per thread: one for each memory tier. */
@@ -319,7 +328,7 @@ int get_arena_index(int id, size_t sz) {
       fprintf(stderr, "Failed to acquire arena lock. Aborting.\n");
       exit(1);
     }
-    sh_create_arena(ret, id, device, invalid);
+    sh_create_arena(ret, id, compress, device, invalid);
     if(pthread_mutex_unlock(&tracker.arena_lock) != 0) {
       fprintf(stderr, "Failed to unlock arena lock. Aborting.\n");
       exit(1);
@@ -384,7 +393,7 @@ int get_arena_index_free(int id) {
  */
  
 /* Adds an arena to the `arenas` array. */
-void sh_create_arena(int index, int id, sicm_device *device, char invalid) {
+void sh_create_arena(int index, int id, char compress, sicm_device *device, char invalid) {
   size_t i;
   arena_info *arena;
   siteinfo_ptr site;
@@ -402,6 +411,11 @@ void sh_create_arena(int index, int id, sicm_device *device, char invalid) {
   }
   
   flags = SICM_ALLOC_RELAXED;
+  //fprintf(stderr, "Checking if we should set madv compress flag\n");
+  if(compress){
+      //fprintf(stderr, "Setting madv compress flag\n");
+      flags |= SICM_MADV_COMPRESS;
+  }
   if(tracker.lazy_migration) {
     flags |= SICM_MOVE_LAZY;
   }

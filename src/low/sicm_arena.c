@@ -238,6 +238,9 @@ static void sicm_arena_range_move(void *aux, void *start, void *end) {
 		break;
 
 	case SICM_ALLOC_RELAXED:
+	case (SICM_ALLOC_RELAXED|SICM_MOVE_RELAXED):
+	case (SICM_ALLOC_RELAXED|SICM_MADV_COMPRESS):
+	case (SICM_ALLOC_RELAXED|SICM_MOVE_RELAXED|SICM_MADV_COMPRESS):
 		// TODO: this will work only for single device, fix it
 		mpol = MPOL_PREFERRED;
 		nodemaskp = sa->nodemask->maskp;
@@ -528,6 +531,9 @@ static void *sa_alloc(extent_hooks_t *h, void *new_addr, size_t size, size_t ali
 		break;
 
 	case SICM_ALLOC_RELAXED:
+	case (SICM_ALLOC_RELAXED|SICM_MOVE_RELAXED):
+	case (SICM_ALLOC_RELAXED|SICM_MADV_COMPRESS):
+	case (SICM_ALLOC_RELAXED|SICM_MOVE_RELAXED|SICM_MADV_COMPRESS):
 		// TODO: this will work only for single device, fix it
 		mpol = MPOL_PREFERRED;
 		nodemaskp = sa->nodemask->maskp;
@@ -588,11 +594,12 @@ static void *sa_alloc(extent_hooks_t *h, void *new_addr, size_t size, size_t ali
 	munmap(ret, m - n);
 	munmap(m + size, n % alignment);
 	ret = (void *) m;
-	fprintf(stderr, "Had to unmap %p-%p and %p-%p to get alignment (%zu).\n", ret, ret + (m-n), ((char *) m) + size, (((char *) m) + size) + n % alignment, alignment);
-	fprintf(stderr, "Allocated %zu, deallocated %zu, left with %zu (should be %zu).\n", size + alignment, (m - n) + (n % alignment), size + alignment - (m - n) - (n % alignment), size);
-	fflush(stderr);
+	//fprintf(stderr, "Had to unmap %p-%p and %p-%p to get alignment (%zu).\n", ret, ret + (m-n), ((char *) m) + size, (((char *) m) + size) + n % alignment, alignment);
+	//fprintf(stderr, "Allocated %zu, deallocated %zu, left with %zu (should be %zu).\n", size + alignment, (m - n) + (n % alignment), size + alignment - (m - n) - (n % alignment), size);
+	//fflush(stderr);
 
 success:
+    //fprintf(stderr, "Reached success\n");
 	flags = MPOL_MF_MOVE;
 	if (mbind(ret, size, mpol, nodemaskp, maxnode, flags) < 0) {
 		perror("mbind");
@@ -602,6 +609,15 @@ success:
 		ret = NULL;
 		goto restore_mempolicy;
 	}
+
+    //fprintf(stderr, "Checking before madvise\n");
+    if (sa->flags & SICM_MADV_COMPRESS) {
+      //  fprintf(stderr, "Calling madvise\n");
+      if ( (madvise( ret, size, MADV_COMPRESS )) != 0 ) {
+        perror("madvise error");
+        exit(errno);
+      }
+    }
 
 	/* Add the extent to the array of extents */
 	extent_arr_insert(sa->extents, ret, (char *)ret + size, NULL);
@@ -647,6 +663,7 @@ static bool sa_dalloc(extent_hooks_t *h, void *addr, size_t size, bool committed
 	still_searching = true;
 	target_ptr = addr;
 	leftover_size = size;
+    //fprintf(stderr, "Called dalloc: %x %ld\n", addr, size);
 	while(still_searching) {
 		partial_start = 0;
 		partial_end = 0;
@@ -677,6 +694,10 @@ static bool sa_dalloc(extent_hooks_t *h, void *addr, size_t size, bool committed
 				break;
 			}
 		}
+        if(start == end && start == 0)
+        {
+            continue;
+        }
 		if(partial) {
 			/* Only free part of this extent. Put the remainder back in the extent array. */
 			extent_arr_delete(sa->extents, partial_start);
@@ -685,12 +706,13 @@ static bool sa_dalloc(extent_hooks_t *h, void *addr, size_t size, bool committed
 				(*sicm_extent_split_callback)(sa, partial_start, partial_end, leftover_size);
 			}
 			if (munmap(partial_start, leftover_size) != 0) {
-				fprintf(stderr, "Failed to unmap %zu bytes starting at %p.\n", leftover_size, partial_start);
+				fprintf(stderr, "1: Failed to unmap %zu bytes starting at %p.\n", leftover_size, partial_start);
 				exit(1);
 			}
 			sa->size -= (leftover_size);
 			leftover_size = 0;
 		} else {
+            //fprintf(stderr, "Start: %ld\nEnd: %ld\n", start, end);
 			/* We'll free this whole extent (and possibly more). */
 			/* Here, leftover_size should always be larger than (end - start). */
 			extent_arr_delete(sa->extents, start);
@@ -698,7 +720,7 @@ static bool sa_dalloc(extent_hooks_t *h, void *addr, size_t size, bool committed
 				(*sicm_extent_dalloc_callback)(sa, start, end);
 			}
 			if (munmap(start, end - start) != 0) {
-				fprintf(stderr, "Failed to unmap %zu bytes starting at %p.\n", end - start, start);
+				fprintf(stderr, "2: Failed to unmap %zu bytes starting at %p.\n", end - start, start);
 				exit(1);
 			}
 			sa->size -= (end - start);
